@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+<title>人口統計グラフ</title>
+<meta charset='utf-8'>
+<!-- Bootstrap -->
+<!--
+<link href='../../css/bootstrap.css' rel='stylesheet'>
+<script src='../../js/bootstrap.js'></script>
+ -->
+<link href='http://getbootstrap.com/dist/css/bootstrap.min.css'
+	rel='stylesheet'>
+<link href='../css/commonstyle.css' rel='stylesheet'>
+
+<!--
+<link href='../css/gpsstreetmap.css' rel='stylesheet'>
+ -->
+
+<!--
+<script src='../../js/jquery-1.11.1.js'></script>
+ -->
+<script src='http://code.jquery.com/jquery-1.11.1.min.js'></script>
+<script src="http://www.data4citizen.jp/app/developer/code/js/odql.js"></script>
+
+<!-- google graph -->
+<script type="text/javascript" src="https://www.google.com/jsapi"></script>
+
+<script type="text/javascript">
+	'use strict';
+
+	var odqlMap = {
+		yearMonthOdql : 'SELECT DISTINCT year, month FROM O_OOAZA_JINKO ORDER BY year,month',
+		townNameOdql : 'SELECT town_name FROM O_OOAZA_JINKO GROUP BY town_name',
+	};
+
+	// 年月データ
+	var yearMonth;
+
+	// 大字名
+	var townNames;
+
+	// グラフデータ
+	var chartData = {};
+
+	var selectedTownNames; // 選択中の大字名配列
+	var selectedStartYearMonth; // 選択中の開始年月
+	var selectedEndYearMonth; // 選択中の終了年月
+
+	$(document).ready(
+			function() {
+				getYearMonths();
+				getTownNames();
+				$('#buttonDisplay').on('click', display);
+				$('input[type="checkbox"][name="display_items"]').on('change',
+						drawChart);
+			});
+
+	function getYearMonths() {
+		yearMonth = ODQLLoader.loadOpenData({
+			odql : odqlMap.yearMonthOdql
+		}).data;
+
+		var yearMonthSelectors = $('#start-year-month optgroup,#end-year-month optgroup');
+		yearMonthSelectors.empty();
+		for (var i = 0, n = yearMonth.length; i < n; i++) {
+			var ymLabel = yearMonth[i].year + "年" + yearMonth[i].month + "月";
+			var ym = makeYearMonth(yearMonth[i].year, yearMonth[i].month);
+			yearMonthSelectors.append($('<option>', {
+				value : ym
+			}).text(ymLabel));
+		}
+
+		$('#end-year-month option').last().attr('selected', 'true');
+
+		// デフォルト値を決定
+		var endYearMonth = $('#end-year-month option').last().attr('value');
+		var endYmArray = parseYearMonth(endYearMonth);
+		var endYear = endYmArray[0];
+		var endMonth = endYmArray[1];
+		var startYear = endYear;
+		var startMonth = endMonth;
+		if (startMonth == 12) {
+			startMonth = 1;
+		} else {
+			// ちょうど一年間分を指定する。
+			startYear--;
+			startMonth++;
+		}
+
+		var startYearMonth = makeYearMonth(startYear, startMonth);
+
+		$('#start-year-month option[value="' + startYearMonth + '"]').attr(
+				'selected', 'true');
+
+	}
+
+	function getTownNames() {
+		townNames = ODQLLoader.loadOpenData({
+			odql : odqlMap.townNameOdql
+		}).data;
+
+		var townNameSelectors = $('#town_name optgroup');
+		townNameSelectors.empty();
+		for (var i = 0, n = townNames.length; i < n; i++) {
+			townNameSelectors.append($('<option>', {
+				value : townNames[i].town_name
+			}).text(townNames[i].town_name));
+		}
+
+	}
+
+	function display() {
+		selectedTownNames = $('#town_name').val();
+		selectedStartYearMonth = $('#start-year-month').val();
+		selectedEndYearMonth = $('#end-year-month').val();
+		if (selectedTownNames == null || selectedTownNames.length <= 0) {
+			alert('大字を選択してください。');
+			return;
+		}
+		// 大字リスト
+		var townNamesList = '';
+		for (var i = 0, n = selectedTownNames.length; i < n; i++) {
+			if (townNamesList.length > 0) {
+				townNamesList += ",";
+			}
+			townNamesList += "'" + selectedTownNames[i] + "'";
+		}
+		// SQLを組み立てる。
+		var sql = "SELECT town_name";
+		sql += ", year";
+		sql += ", month";
+		sql += ", male";
+		sql += ", female";
+		sql += ", total_count";
+		sql += ", family_count";
+		sql += " FROM O_OOAZA_JINKO";
+		sql += " WHERE town_name in (" + townNamesList + ")";
+		sql += " AND CONCAT(year, lpad(month, 2, '0')) >= '"
+				+ selectedStartYearMonth + "'";
+		sql += " AND CONCAT(year, lpad(month, 2, '0')) <= '"
+				+ selectedEndYearMonth + "'";
+		sql += " ORDER BY town_name, year, month";
+
+		chartData = ODQLLoader.loadOpenData({
+			odql : sql
+		}).data;
+		drawChart();
+
+	}
+
+	function makeYearMonth(year, month) {
+		return year + ('0' + month).slice(-2);
+	}
+
+	function parseYearMonth(yearMonth) {
+		return [ parseInt(yearMonth.slice(0, 4)), parseInt(yearMonth.slice(-2)) ];
+	}
+
+	function null2Zero(val) {
+		if (val == null) {
+			return 0;
+		}
+		return val;
+	}
+
+	function containArray(array, val) {
+		return (0 <= $.inArray(val, array));
+	}
+
+	// GOOGLE GRAPHS
+
+	// Load the Visualization API and the piechart package.
+	google.load('visualization', '1.0', {
+		'packages' : [ 'corechart' ]
+	});
+
+	// Set a callback to run when the Google Visualization API is loaded.
+	//google.setOnLoadCallback(drawChart);
+
+	// Callback that creates and populates a data table,
+	// instantiates the pie chart, passes in the data and
+	// draws it.
+	var dataObj = {};
+	function drawChart() {
+
+		// データを整形
+		for (var i = 0, n = chartData.length; i < n; i++) {
+			var obj = chartData[i];
+			var ym = makeYearMonth(obj.year, obj.month);
+			var ymObj = dataObj[ym];
+			if (ymObj == null) {
+				ymObj = {};
+				dataObj[ym] = ymObj;
+			}
+			ymObj[obj.town_name] = obj;
+		}
+
+		// 表示項目の決定
+		var displayItems = [];
+		$('[name="display_items"]:checked').each(function() {
+			displayItems.push($(this).val());
+		});
+
+		if (displayItems.length <= 0) {
+			return;
+		}
+
+		// チャートデータを作成
+		var dataArray = [];
+		var headers = [ '年月' ];
+		var headersIdx = 1;
+		for (var i = 0, n = selectedTownNames.length; i < n; i++) {
+			if (containArray(displayItems, 'male')) {
+				headers[headersIdx++] = selectedTownNames[i] + " 男性";
+			}
+			if (containArray(displayItems, 'female')) {
+				headers[headersIdx++] = selectedTownNames[i] + " 女性";
+			}
+			if (containArray(displayItems, 'total_count')) {
+				headers[headersIdx++] = selectedTownNames[i] + " 合計";
+			}
+			if (containArray(displayItems, 'family_count')) {
+				headers[headersIdx++] = selectedTownNames[i] + " 世帯";
+			}
+		}
+		dataArray[0] = headers;
+		var workYearMonth = parseYearMonth(selectedStartYearMonth);
+		var endYearMonth = parseYearMonth(selectedEndYearMonth);
+		for (var dataIdx = 1;; dataIdx++) {
+
+			var ym = makeYearMonth(workYearMonth[0], workYearMonth[1]);
+			var ymObj = dataObj[ym];
+			if (ymObj == null) {
+				ymObj = {};
+			}
+
+			// 1レコードのデータ
+			var row = [ ym ];
+			var rowIdx = 1;
+
+			for (var j = 0, m = selectedTownNames.length; j < m; j++) {
+				var data = ymObj[selectedTownNames[j]];
+				if (data == null) {
+					if (containArray(displayItems, 'male')) {
+						row[rowIdx++] = 0; // 男性
+					}
+					if (containArray(displayItems, 'female')) {
+						row[rowIdx++] = 0; // 女性
+					}
+					if (containArray(displayItems, 'total_count')) {
+						row[rowIdx++] = 0; // 合計
+					}
+					if (containArray(displayItems, 'family_count')) {
+						row[rowIdx++] = 0; // 世帯
+					}
+				} else {
+					if (containArray(displayItems, 'male')) {
+						row[rowIdx++] = null2Zero(data.male); // 男性
+					}
+					if (containArray(displayItems, 'female')) {
+						row[rowIdx++] = null2Zero(data.female); // 女性
+					}
+					if (containArray(displayItems, 'total_count')) {
+						row[rowIdx++] = null2Zero(data.total_count); // 合計
+					}
+					if (containArray(displayItems, 'family_count')) {
+						row[rowIdx++] = null2Zero(data.family_count); // 世帯
+					}
+				}
+			}
+
+			// データの追加
+			dataArray[dataIdx] = row;
+
+			// 1か月加算。
+			workYearMonth[1] += 1;
+			if (workYearMonth[1] > 12) {
+				workYearMonth[0]++;
+				workYearMonth[1] = 1;
+			}
+			if (makeYearMonth(workYearMonth[0], workYearMonth[1]) > selectedEndYearMonth) {
+				break;
+			}
+		}
+		var chartDataObj = google.visualization.arrayToDataTable(dataArray);
+
+		// Set chart options
+		var options = {
+			'title' : '大字別人口統計',
+		};
+
+		// Instantiate and draw our chart, passing in some options.
+		var chart = new google.visualization.LineChart(document
+				.getElementById('graph-area'));
+		chart.draw(chartDataObj, options);
+	}
+</script>
+
+<script src='../js/cclicense.js'></script>
+
+</head>
+
+<body class='pages'>
+
+	<div class='container'>
+
+		<div>
+			<h3>人口統計グラフ</h3>
+			<div class='col-xs-12 col-sm-12 col-md-4 col-lg-4'>
+				<select id="town_name" class="form-control" multiple="multiple">
+					<optgroup label="">
+						<option>データロード中...</option>
+					</optgroup>
+				</select>
+			</div>
+			<div class='col-xs-12 col-sm-12 col-md-4 col-lg-4'>
+				<select id="start-year-month" class="form-control">
+					<optgroup label="">
+						<option>データロード中...</option>
+					</optgroup>
+				</select>
+			</div>
+			<div class='col-xs-12 col-sm-12 col-md-4 col-lg-4'>
+				<select id="end-year-month" class="form-control">
+					<optgroup label="">
+						<option>データロード中...</option>
+					</optgroup>
+				</select>
+			</div>
+		</div>
+
+		<div class='col-xs-12 col-sm-12 col-md-12 col-lg-12 text-center'>
+			<div class=" btn-group">
+				<button id="buttonDisplay" class="btn btn-primary">表示</button>
+			</div>
+		</div>
+
+		<div class='col-xs-12 col-sm-12 col-md-12 col-lg-12 form-inline'>
+			<div class="checkbox col-xs-3 col-sm-3 col-md-3 col-lg-3 form-group">
+				<input type="checkbox" id="checkbox_male" name="display_items"
+					value="male" checked></input><label for="checkbox_male">男性</label>
+			</div>
+			<div class="checkbox col-xs-3 col-sm-3 col-md-3 col-lg-3 form-group">
+				<input type="checkbox" id="checkbox_female" name="display_items"
+					value="female" checked></input><label for="checkbox_female">女性</label>
+			</div>
+			<div class="checkbox col-xs-3 col-sm-3 col-md-3 col-lg-3 form-group">
+				<input type="checkbox" id="checkbox_total_count"
+					name="display_items" value="total_count" checked></input><label
+					for="checkbox_total_count">合計</label>
+			</div>
+			<div class="checkbox col-xs-3 col-sm-3 col-md-3 col-lg-3 form-group">
+				<input type="checkbox" id="checkbox_family_count"
+					name="display_items" value="family_count" checked></input><label
+					for="checkbox_family_count">世帯</label>
+			</div>
+		</div>
+		<div id="graph-area" class="col-xs-12 col-sm-12 col-md-12 col-lg-12"
+			style="height: 500px;"></div>
+
+		<div class='col-xs-12 col-sm-12 col-md-12 col-lg-12 text-center'>
+			<i class="glyphicon glyphicon-search"></i> このアプリは<a
+				href="http://www.data4citizen.jp/app/users/openDataTop/show/O_OOAZA_JINKO">毎月大字別人口</a>を使用しています。
+			<div class="cc-license cc-by"></div>
+		</div>
+	</div>
+</body>
+
+</html>
